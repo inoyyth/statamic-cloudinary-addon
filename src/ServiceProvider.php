@@ -36,7 +36,26 @@ class ServiceProvider extends AddonServiceProvider
         );
 
         $this->app->singleton(CloudinaryService::class, function () {
-            return new CloudinaryService;
+            $cloudName = config('statamic-cloudinary.cloud_name') ?? env('CLOUDINARY_CLOUD_NAME');
+            $apiKey = config('statamic-cloudinary.api_key') ?? env('CLOUDINARY_API_KEY');
+            $apiSecret = config('statamic-cloudinary.api_secret') ?? env('CLOUDINARY_API_SECRET');
+            $url = config('statamic-cloudinary.url') ?? env('CLOUDINARY_URL');
+            $secure = config('statamic-cloudinary.secure') ?? env('CLOUDINARY_SECURE', true);
+
+            $cloudinary = $url
+                ? new Cloudinary($url)
+                : new Cloudinary([
+                    'cloud' => [
+                        'cloud_name' => $cloudName,
+                        'api_key' => $apiKey,
+                        'api_secret' => $apiSecret,
+                    ],
+                    'url' => [
+                        'secure' => (bool) $secure,
+                    ],
+                ]);
+
+            return new CloudinaryService($cloudinary);
         });
 
         $this->app->alias(CloudinaryService::class, 'cloudinary-service');
@@ -79,7 +98,7 @@ class ServiceProvider extends AddonServiceProvider
     }
 
     /**
-     * Initialize Cloudinary Configuration if URL is provided.
+     * Initialize Cloudinary Configuration if credentials are provided.
      */
     protected function bootCloudinaryConfiguration(): void
     {
@@ -87,6 +106,24 @@ class ServiceProvider extends AddonServiceProvider
 
         if ($cloudinaryUrl) {
             Configuration::instance($cloudinaryUrl);
+        } else {
+            $cloudName = config('statamic-cloudinary.cloud_name') ?? env('CLOUDINARY_CLOUD_NAME');
+            $apiKey = config('statamic-cloudinary.api_key') ?? env('CLOUDINARY_API_KEY');
+            $apiSecret = config('statamic-cloudinary.api_secret') ?? env('CLOUDINARY_API_SECRET');
+            $secure = config('statamic-cloudinary.secure') ?? env('CLOUDINARY_SECURE', true);
+
+            if ($cloudName) {
+                Configuration::instance([
+                    'cloud' => [
+                        'cloud_name' => $cloudName,
+                        'api_key' => $apiKey,
+                        'api_secret' => $apiSecret,
+                    ],
+                    'url' => [
+                        'secure' => (bool) $secure,
+                    ],
+                ]);
+            }
         }
     }
 
@@ -100,17 +137,20 @@ class ServiceProvider extends AddonServiceProvider
             $apiKey = $config['api_key'] ?? config('statamic-cloudinary.api_key') ?? env('CLOUDINARY_API_KEY');
             $apiSecret = $config['api_secret'] ?? config('statamic-cloudinary.api_secret') ?? env('CLOUDINARY_API_SECRET');
             $secure = $config['secure'] ?? config('statamic-cloudinary.secure') ?? env('CLOUDINARY_SECURE', true);
+            $url = $config['url'] ?? config('statamic-cloudinary.url') ?? env('CLOUDINARY_URL');
 
-            $cloudinary = new Cloudinary([
-                'cloud' => [
-                    'cloud_name' => $cloudName,
-                    'api_key' => $apiKey,
-                    'api_secret' => $apiSecret,
-                ],
-                'url' => [
-                    'secure' => $secure,
-                ],
-            ]);
+            $cloudinary = $url
+                ? new Cloudinary($url)
+                : new Cloudinary([
+                    'cloud' => [
+                        'cloud_name' => $cloudName,
+                        'api_key' => $apiKey,
+                        'api_secret' => $apiSecret,
+                    ],
+                    'url' => [
+                        'secure' => (bool) $secure,
+                    ],
+                ]);
 
             $adapter = new CloudinaryFlysystemAdapter($cloudinary);
             $flysystem = new Filesystem($adapter, $config);
@@ -134,6 +174,14 @@ class ServiceProvider extends AddonServiceProvider
 
         Blade::directive('cloudinary', function ($expression) {
             return "<?php echo app(\\Inoyyth\\StatamicCloudinary\\Services\\StatamicImageService::class)->resolveImageUrl({$expression}); ?>";
+        });
+
+        Blade::directive('cloudinaryTransform', function ($expression) {
+            return "<?php echo app(\\Inoyyth\\StatamicCloudinary\\Services\\CloudinaryService::class)->getTransformedUrl({$expression}); ?>";
+        });
+
+        Blade::directive('cloudinaryImage', function ($expression) {
+            return "<?php echo app(\\Inoyyth\\StatamicCloudinary\\Services\\CloudinaryService::class)->imageTag({$expression}); ?>";
         });
     }
 }

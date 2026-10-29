@@ -17,9 +17,29 @@ if (! function_exists('cloudinary_transformed_url')) {
     /**
      * Generate an optimized and transformed image URL via Cloudinary.
      */
-    function cloudinary_transformed_url(string $publicId, int $width = 400, int $height = 400): string
+    function cloudinary_transformed_url(mixed $source, array|int $optionsOrWidth = 400, ?int $height = null): string
     {
-        return app(CloudinaryService::class)->getTransformedUrl($publicId, $width, $height);
+        return app(CloudinaryService::class)->getTransformedUrl($source, $optionsOrWidth, $height);
+    }
+}
+
+if (! function_exists('cloudinary_url')) {
+    /**
+     * Generate a Cloudinary URL with optional transformation options.
+     */
+    function cloudinary_url(mixed $source, array $options = []): string
+    {
+        return app(CloudinaryService::class)->url($source, $options);
+    }
+}
+
+if (! function_exists('cloudinary_image_tag')) {
+    /**
+     * Generate an HTML <img> tag with transformations and HTML attributes.
+     */
+    function cloudinary_image_tag(mixed $source, array $transformations = [], array $htmlAttributes = []): string
+    {
+        return app(CloudinaryService::class)->imageTag($source, $transformations, $htmlAttributes);
     }
 }
 

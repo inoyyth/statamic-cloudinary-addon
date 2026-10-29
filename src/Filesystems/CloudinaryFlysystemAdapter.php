@@ -214,7 +214,7 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 
     public function setVisibility(string $path, string $visibility): void
     {
-        // Cloudinary assets are managed publicly by default
+        // Assets are managed publicly by default
     }
 
     public function visibility(string $path): FileAttributes
@@ -226,26 +226,26 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
     {
         $meta = $this->getAssetMetadata($path);
         if ($meta === null) {
-            throw UnableToRetrieveMetadata::mimeType($path);
+            $ext = pathinfo($path, PATHINFO_EXTENSION);
+            $mime = (new MimeTypes)->getMimeTypes($ext)[0] ?? 'application/octet-stream';
+
+            return new FileAttributes($path, null, 'public', null, $mime);
         }
 
-        $format = $meta['format'] ?? pathinfo($path, PATHINFO_EXTENSION);
-        $mimes = $format ? MimeTypes::getDefault()->getMimeTypes($format) : [];
-        $mime = $mimes[0] ?? 'application/octet-stream';
+        $format = $meta['format'] ?? null;
+        $mime = $format ? ((new MimeTypes)->getMimeTypes($format)[0] ?? 'application/octet-stream') : 'application/octet-stream';
 
-        return new FileAttributes($path, null, null, null, $mime);
+        return new FileAttributes($path, null, 'public', null, $mime);
     }
 
     public function lastModified(string $path): FileAttributes
     {
         $meta = $this->getAssetMetadata($path);
-        if ($meta === null) {
+        if ($meta === null || ! isset($meta['created_at'])) {
             throw UnableToRetrieveMetadata::lastModified($path);
         }
 
-        $timestamp = isset($meta['created_at']) ? strtotime($meta['created_at']) : time();
-
-        return new FileAttributes($path, null, null, $timestamp);
+        return new FileAttributes($path, null, null, strtotime($meta['created_at']));
     }
 
     public function fileSize(string $path): FileAttributes
@@ -282,27 +282,34 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
             // Folders may not exist
         }
 
-        // List assets
-        try {
-            $response = $this->cloudinary->adminApi()->assets($params);
-            $resources = $response['resources'] ?? [];
+        // List assets with pagination cursor support
+        do {
+            try {
+                $response = $this->cloudinary->adminApi()->assets($params);
+                $resources = $response['resources'] ?? [];
 
-            foreach ($resources as $resource) {
-                $format = $resource['format'] ?? '';
-                $itemPath = $resource['public_id'].($format ? '.'.$format : '');
+                foreach ($resources as $resource) {
+                    $format = $resource['format'] ?? '';
+                    $itemPath = $resource['public_id'].($format ? '.'.$format : '');
 
-                $this->assetCache[$itemPath] = (array) $resource;
+                    $this->assetCache[$itemPath] = (array) $resource;
 
-                yield new FileAttributes(
-                    $itemPath,
-                    $resource['bytes'] ?? 0,
-                    'public',
-                    isset($resource['created_at']) ? strtotime($resource['created_at']) : null
-                );
+                    yield new FileAttributes(
+                        $itemPath,
+                        $resource['bytes'] ?? 0,
+                        'public',
+                        isset($resource['created_at']) ? strtotime($resource['created_at']) : null
+                    );
+                }
+
+                $nextCursor = $response['next_cursor'] ?? null;
+                if ($nextCursor) {
+                    $params['next_cursor'] = $nextCursor;
+                }
+            } catch (\Throwable) {
+                break;
             }
-        } catch (\Throwable) {
-            return [];
-        }
+        } while (! empty($nextCursor));
     }
 
     public function move(string $source, string $destination, Config $config): void
@@ -313,8 +320,8 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 
         try {
             $this->cloudinary->uploadApi()->rename($fromId, $toId, [
-                'resource_type' => $resourceType,
                 'overwrite' => true,
+                'resource_type' => $resourceType,
             ]);
 
             unset($this->assetCache[ltrim($source, '/')]);
