@@ -22,7 +22,7 @@ class CloudinaryService
      */
     public function upload(string $filePath, ?string $folder = null, array $options = []): array
     {
-        $defaultFolder = $folder ?? config('statamic-cloudinary.upload_folder', 'uploads');
+        $defaultFolder = $folder ?? $this->getConfig('statamic-cloudinary.upload_folder', 'uploads');
 
         $defaultOptions = [
             'folder' => $defaultFolder,
@@ -53,5 +53,14 @@ class CloudinaryService
             ->format(Format::auto())
             ->quality(Quality::auto())
             ->toUrl();
+    }
+
+    protected function getConfig(string $key, mixed $default = null): mixed
+    {
+        if (function_exists('app') && app()->bound('config')) {
+            return config($key, $default);
+        }
+
+        return $default;
     }
 }

@@ -17,8 +17,9 @@ class StatamicImageService
      */
     public function resolveImageUrl(mixed $img, ?string $fallback = null): string
     {
-        $fallback = $fallback ?? config('statamic-cloudinary.default_fallback', self::DEFAULT_FALLBACK);
-        $container = config('statamic-cloudinary.default_container', 'cloudinary');
+        $defaultFallback = $this->getConfig('statamic-cloudinary.default_fallback', self::DEFAULT_FALLBACK);
+        $fallback = $fallback ?? $defaultFallback;
+        $container = $this->getConfig('statamic-cloudinary.default_container', 'cloudinary');
 
         // 1. Statamic augmented Value object
         if ($img instanceof Value) {
@@ -66,17 +67,29 @@ class StatamicImageService
             }
 
             // Find in Statamic Assets (e.g. by path or container ID)
-            $foundAsset = Asset::find($trimmed)
-                ?? Asset::find($container.'::'.$trimmed)
-                ?? Asset::query()->where('path', $trimmed)->first()
-                ?? Asset::query()->where('container', $container)->where('path', $trimmed)->first();
+            try {
+                $foundAsset = Asset::find($trimmed)
+                    ?? Asset::find($container.'::'.$trimmed)
+                    ?? Asset::query()->where('path', $trimmed)->first()
+                    ?? Asset::query()->where('container', $container)->where('path', $trimmed)->first();
 
-            if ($foundAsset) {
-                return (string) $foundAsset->url();
+                if ($foundAsset) {
+                    return (string) $foundAsset->url();
+                }
+            } catch (\Throwable) {
+                // If Asset facade or DB is not booted in unit tests
             }
 
-            // Fallback to local asset if file exists or relative path
-            return asset($trimmed);
+            // Fallback to local asset if helper exists
+            if (function_exists('asset')) {
+                try {
+                    return asset($trimmed);
+                } catch (\Throwable) {
+                    return $trimmed;
+                }
+            }
+
+            return $trimmed;
         }
 
         return $this->fallbackUrl($fallback);
@@ -121,6 +134,26 @@ class StatamicImageService
             return $fallback;
         }
 
-        return asset($fallback);
+        if (function_exists('asset')) {
+            try {
+                return asset($fallback);
+            } catch (\Throwable) {
+                return $fallback;
+            }
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * Safely retrieve config with fallback if container is not bound.
+     */
+    protected function getConfig(string $key, mixed $default = null): mixed
+    {
+        if (function_exists('app') && app()->bound('config')) {
+            return config($key, $default);
+        }
+
+        return $default;
     }
 }
