@@ -138,6 +138,7 @@ class ServiceProvider extends AddonServiceProvider
             $apiSecret = $config['api_secret'] ?? config('statamic-cloudinary.api_secret') ?? env('CLOUDINARY_API_SECRET');
             $secure = $config['secure'] ?? config('statamic-cloudinary.secure') ?? env('CLOUDINARY_SECURE', true);
             $url = $config['url'] ?? config('statamic-cloudinary.url') ?? env('CLOUDINARY_URL');
+            $prefix = $config['prefix'] ?? $config['folder'] ?? config('statamic-cloudinary.prefix') ?? '';
 
             $cloudinary = $url
                 ? new Cloudinary($url)
@@ -152,7 +153,7 @@ class ServiceProvider extends AddonServiceProvider
                     ],
                 ]);
 
-            $adapter = new CloudinaryFlysystemAdapter($cloudinary);
+            $adapter = new CloudinaryFlysystemAdapter($cloudinary, $prefix);
             $flysystem = new Filesystem($adapter, $config);
 
             return new LaravelFilesystemAdapter($flysystem, $adapter, $config);

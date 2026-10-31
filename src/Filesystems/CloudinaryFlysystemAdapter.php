@@ -7,6 +7,7 @@ use League\Flysystem\Config;
 use League\Flysystem\DirectoryAttributes;
 use League\Flysystem\FileAttributes;
 use League\Flysystem\FilesystemAdapter;
+use League\Flysystem\PathPrefixer;
 use League\Flysystem\UnableToDeleteFile;
 use League\Flysystem\UnableToMoveFile;
 use League\Flysystem\UnableToReadFile;
@@ -18,6 +19,8 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 {
     protected Cloudinary $cloudinary;
 
+    protected PathPrefixer $prefixer;
+
     /**
      * In-memory cache for asset metadata to reduce API calls.
      */
@@ -28,9 +31,10 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
      */
     protected array $dirCache = [];
 
-    public function __construct(Cloudinary $cloudinary)
+    public function __construct(Cloudinary $cloudinary, ?string $prefix = '')
     {
         $this->cloudinary = $cloudinary;
+        $this->prefixer = new PathPrefixer($prefix ?? '');
     }
 
     public function fileExists(string $path): bool
@@ -40,30 +44,42 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 
     public function directoryExists(string $path): bool
     {
-        $path = trim($path, '/.');
-        if ($path === '') {
+        $location = trim($path, '/');
+        if ($location === '.' || $location === '') {
             return true;
         }
 
-        if (isset($this->dirCache[$path])) {
-            return $this->dirCache[$path];
+        $prefixedPath = trim($this->prefixer->prefixDirectoryPath($location), '/');
+        if ($prefixedPath === '') {
+            return true;
+        }
+
+        if (isset($this->dirCache[$prefixedPath])) {
+            return $this->dirCache[$prefixedPath];
         }
 
         try {
-            $this->cloudinary->adminApi()->subfolders($path);
+            $this->cloudinary->adminApi()->subfolders($prefixedPath);
 
-            return $this->dirCache[$path] = true;
+            return $this->dirCache[$prefixedPath] = true;
         } catch (\Throwable) {
-            try {
-                $response = $this->cloudinary->adminApi()->assets([
-                    'prefix' => $path.'/',
-                    'max_results' => 1,
-                ]);
+            foreach (['image', 'raw', 'video'] as $type) {
+                try {
+                    $response = $this->cloudinary->adminApi()->assets([
+                        'prefix' => $prefixedPath.'/',
+                        'resource_type' => $type,
+                        'max_results' => 1,
+                    ]);
 
-                return $this->dirCache[$path] = ! empty($response['resources']);
-            } catch (\Throwable) {
-                return $this->dirCache[$path] = false;
+                    if (! empty($response['resources'])) {
+                        return $this->dirCache[$prefixedPath] = true;
+                    }
+                } catch (\Throwable) {
+                    // Try next resource type
+                }
             }
+
+            return $this->dirCache[$prefixedPath] = false;
         }
     }
 
@@ -100,24 +116,33 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
         }
 
         try {
-            $publicId = $this->getPublicId($path);
-            $resourceType = $this->getResourceType($path);
+            $prefixedPath = $this->prefixer->prefixPath($path);
+            $cleanPrefixedPath = ltrim($prefixedPath, '/');
+            $cleanPath = ltrim($path, '/');
+
+            $publicId = $this->getPublicId($cleanPrefixedPath);
+            $resourceType = $this->getResourceType($cleanPrefixedPath);
 
             $result = $this->cloudinary->uploadApi()->upload($filePath, [
                 'public_id' => $publicId,
                 'overwrite' => true,
+                'invalidate' => true,
                 'resource_type' => $resourceType,
+                'context' => [
+                    'path' => $cleanPrefixedPath,
+                ],
             ]);
 
-            $cleanPath = ltrim($path, '/');
-            $this->assetCache[$cleanPath] = (array) $result;
+            $resultArray = (array) $result;
+            $this->assetCache[$cleanPath] = $resultArray;
+            $this->assetCache[$cleanPrefixedPath] = $resultArray;
 
-            $dir = trim(pathinfo($cleanPath, PATHINFO_DIRNAME), '/.');
-            if ($dir !== '') {
+            $dir = trim(pathinfo($cleanPath, PATHINFO_DIRNAME), '/');
+            if ($dir !== '' && $dir !== '.') {
                 $this->dirCache[$dir] = true;
             }
-        } catch (\Throwable $e) {
-            throw UnableToWriteFile::atLocation($path, $e->getMessage(), $e);
+        } catch (\Throwable) {
+            throw UnableToWriteFile::atLocation($path);
         } finally {
             if ($tempFile && file_exists($tempFile)) {
                 @unlink($tempFile);
@@ -132,10 +157,11 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
             'http' => [
                 'timeout' => 30,
                 'follow_location' => 1,
+                'header' => "Cache-Control: no-cache\r\nPragma: no-cache\r\n",
             ],
             'ssl' => [
-                'verify_peer' => false,
-                'verify_peer_name' => false,
+                'verify_peer' => true,
+                'verify_peer_name' => true,
             ],
         ]);
 
@@ -154,10 +180,11 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
             'http' => [
                 'timeout' => 30,
                 'follow_location' => 1,
+                'header' => "Cache-Control: no-cache\r\nPragma: no-cache\r\n",
             ],
             'ssl' => [
-                'verify_peer' => false,
-                'verify_peer_name' => false,
+                'verify_peer' => true,
+                'verify_peer_name' => true,
             ],
         ]);
 
@@ -171,8 +198,12 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 
     public function delete(string $path): void
     {
-        $publicId = $this->getPublicId($path);
-        $resourceType = $this->getResourceType($path);
+        $prefixedPath = $this->prefixer->prefixPath($path);
+        $cleanPrefixedPath = ltrim($prefixedPath, '/');
+        $cleanPath = ltrim($path, '/');
+
+        $publicId = $this->getPublicId($cleanPrefixedPath);
+        $resourceType = $this->getResourceType($cleanPrefixedPath);
 
         try {
             $this->cloudinary->uploadApi()->destroy($publicId, [
@@ -180,7 +211,8 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
                 'resource_type' => $resourceType,
             ]);
 
-            unset($this->assetCache[ltrim($path, '/')]);
+            unset($this->assetCache[$cleanPath]);
+            unset($this->assetCache[$cleanPrefixedPath]);
         } catch (\Throwable $e) {
             throw UnableToDeleteFile::atLocation($path, $e->getMessage(), $e);
         }
@@ -188,24 +220,36 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 
     public function deleteDirectory(string $path): void
     {
-        $path = trim($path, '/.');
-        if ($path !== '') {
+        $location = trim($path, '/');
+        if ($location === '.' || $location === '') {
+            return;
+        }
+
+        $prefixedPath = trim($this->prefixer->prefixDirectoryPath($location), '/');
+        if ($prefixedPath !== '') {
             try {
-                $this->cloudinary->adminApi()->deleteFolder($path);
+                $this->cloudinary->adminApi()->deleteFolder($prefixedPath);
             } catch (\Throwable) {
                 // Ignore if not found
             }
-            unset($this->dirCache[$path]);
+            unset($this->dirCache[$location]);
+            unset($this->dirCache[$prefixedPath]);
         }
     }
 
     public function createDirectory(string $path, Config $config): void
     {
-        $path = trim($path, '/.');
-        if ($path !== '') {
+        $location = trim($path, '/');
+        if ($location === '.' || $location === '') {
+            return;
+        }
+
+        $prefixedPath = trim($this->prefixer->prefixDirectoryPath($location), '/');
+        if ($prefixedPath !== '') {
             try {
-                $this->cloudinary->adminApi()->createFolder($path);
-                $this->dirCache[$path] = true;
+                $this->cloudinary->adminApi()->createFolder($prefixedPath);
+                $this->dirCache[$location] = true;
+                $this->dirCache[$prefixedPath] = true;
             } catch (\Throwable) {
                 // Ignore if already exists
             }
@@ -225,14 +269,15 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
     public function mimeType(string $path): FileAttributes
     {
         $meta = $this->getAssetMetadata($path);
+        $ext = pathinfo($path, PATHINFO_EXTENSION);
+
         if ($meta === null) {
-            $ext = pathinfo($path, PATHINFO_EXTENSION);
             $mime = (new MimeTypes)->getMimeTypes($ext)[0] ?? 'application/octet-stream';
 
             return new FileAttributes($path, null, 'public', null, $mime);
         }
 
-        $format = $meta['format'] ?? null;
+        $format = $meta['format'] ?? $ext;
         $mime = $format ? ((new MimeTypes)->getMimeTypes($format)[0] ?? 'application/octet-stream') : 'application/octet-stream';
 
         return new FileAttributes($path, null, 'public', null, $mime);
@@ -260,72 +305,127 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 
     public function listContents(string $path, bool $deep): iterable
     {
-        $prefix = trim($path, '/.');
-        $params = ['max_results' => 500];
+        $cleanPath = trim($path, '/');
+        if ($cleanPath === '.') {
+            $cleanPath = '';
+        }
 
-        if (! empty($prefix)) {
-            $params['prefix'] = $prefix;
+        $prefixedLocation = trim($this->prefixer->prefixDirectoryPath($cleanPath), '/');
+        $params = ['max_results' => 500, 'context' => true];
+
+        if ($prefixedLocation !== '') {
+            $params['prefix'] = $prefixedLocation.'/';
         }
 
         // List subfolders
         try {
-            $foldersResponse = empty($prefix)
+            $foldersResponse = empty($prefixedLocation)
                 ? $this->cloudinary->adminApi()->rootFolders()
-                : $this->cloudinary->adminApi()->subfolders($prefix);
+                : $this->cloudinary->adminApi()->subfolders($prefixedLocation);
 
             foreach ($foldersResponse['folders'] ?? [] as $folder) {
                 $folderPath = $folder['path'] ?? $folder['name'];
-                $this->dirCache[$folderPath] = true;
-                yield new DirectoryAttributes($folderPath);
+                $strippedDir = $this->prefixer->stripDirectoryPrefix($folderPath);
+                $this->dirCache[$strippedDir] = true;
+                yield new DirectoryAttributes($strippedDir);
             }
         } catch (\Throwable) {
             // Folders may not exist
         }
 
-        // List assets with pagination cursor support
-        do {
-            try {
-                $response = $this->cloudinary->adminApi()->assets($params);
-                $resources = $response['resources'] ?? [];
+        // List assets across image, video, and raw resource types
+        foreach (['image', 'video', 'raw'] as $resourceType) {
+            $typeParams = array_merge($params, [
+                'resource_type' => $resourceType,
+            ]);
+            $nextCursor = null;
 
-                foreach ($resources as $resource) {
-                    $format = $resource['format'] ?? '';
-                    $itemPath = $resource['public_id'].($format ? '.'.$format : '');
+            do {
+                try {
+                    $currentParams = $typeParams;
+                    if ($nextCursor) {
+                        $currentParams['next_cursor'] = $nextCursor;
+                    }
 
-                    $this->assetCache[$itemPath] = (array) $resource;
+                    $response = $this->cloudinary->adminApi()->assets($currentParams);
+                    $resources = $response['resources'] ?? [];
 
-                    yield new FileAttributes(
-                        $itemPath,
-                        $resource['bytes'] ?? 0,
-                        'public',
-                        isset($resource['created_at']) ? strtotime($resource['created_at']) : null
-                    );
+                    foreach ($resources as $resource) {
+                        $customPath = $resource['context']['custom']['path'] ?? null;
+
+                        if ($customPath) {
+                            $itemPath = $customPath;
+                        } elseif ($resourceType === 'raw') {
+                            $itemPath = $resource['public_id'];
+                        } else {
+                            $format = $resource['format'] ?? '';
+                            $itemPath = $resource['public_id'].($format !== '' ? '.'.$format : '');
+                        }
+
+                        $relativeItemPath = $this->prefixer->stripPrefix($itemPath);
+
+                        $this->assetCache[ltrim($itemPath, '/')] = (array) $resource;
+                        $this->assetCache[ltrim($relativeItemPath, '/')] = (array) $resource;
+
+                        if (! $deep) {
+                            $itemDir = trim(pathinfo($relativeItemPath, PATHINFO_DIRNAME), '/');
+                            if ($itemDir === '.') {
+                                $itemDir = '';
+                            }
+                            if ($itemDir !== $cleanPath) {
+                                continue;
+                            }
+                        }
+
+                        yield new FileAttributes(
+                            $relativeItemPath,
+                            $resource['bytes'] ?? 0,
+                            'public',
+                            isset($resource['created_at']) ? strtotime($resource['created_at']) : null
+                        );
+                    }
+
+                    $nextCursor = $response['next_cursor'] ?? null;
+                } catch (\Throwable) {
+                    break;
                 }
-
-                $nextCursor = $response['next_cursor'] ?? null;
-                if ($nextCursor) {
-                    $params['next_cursor'] = $nextCursor;
-                }
-            } catch (\Throwable) {
-                break;
-            }
-        } while (! empty($nextCursor));
+            } while (! empty($nextCursor));
+        }
     }
 
     public function move(string $source, string $destination, Config $config): void
     {
-        $fromId = $this->getPublicId($source);
-        $toId = $this->getPublicId($destination);
-        $resourceType = $this->getResourceType($source);
+        $prefixedSource = $this->prefixer->prefixPath($source);
+        $prefixedDestination = $this->prefixer->prefixPath($destination);
+
+        $fromId = $this->getPublicId($prefixedSource);
+        $toId = $this->getPublicId($prefixedDestination);
+        $resourceType = $this->getResourceType($prefixedSource);
 
         try {
             $this->cloudinary->uploadApi()->rename($fromId, $toId, [
                 'overwrite' => true,
+                'invalidate' => true,
                 'resource_type' => $resourceType,
             ]);
 
+            // Update context with destination path
+            try {
+                $this->cloudinary->uploadApi()->explicit($toId, [
+                    'type' => 'upload',
+                    'resource_type' => $resourceType,
+                    'context' => [
+                        'path' => ltrim($prefixedDestination, '/'),
+                    ],
+                ]);
+            } catch (\Throwable) {
+                // Ignore optional context update failure
+            }
+
             unset($this->assetCache[ltrim($source, '/')]);
             unset($this->assetCache[ltrim($destination, '/')]);
+            unset($this->assetCache[ltrim($prefixedSource, '/')]);
+            unset($this->assetCache[ltrim($prefixedDestination, '/')]);
         } catch (\Throwable $e) {
             throw UnableToMoveFile::fromLocationTo($source, $destination, $e);
         }
@@ -342,10 +442,11 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 
     public function getUrl(string $path): string
     {
-        $cleanPath = trim($path, '/.');
+        $prefixedPath = $this->prefixer->prefixPath($path);
+        $cleanPath = ltrim($prefixedPath, '/');
         $cloudName = $this->cloudinary->configuration->cloud->cloudName;
 
-        if ($cleanPath === '') {
+        if ($cleanPath === '' || $cleanPath === '.') {
             return "https://res.cloudinary.com/{$cloudName}/image/upload";
         }
 
@@ -367,10 +468,25 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
         return $this->cloudinary;
     }
 
+    public function getPrefixer(): PathPrefixer
+    {
+        return $this->prefixer;
+    }
+
     protected function getPublicId(string $path): string
     {
-        $dir = pathinfo($path, PATHINFO_DIRNAME);
-        $filename = pathinfo($path, PATHINFO_FILENAME);
+        $cleanPath = ltrim($path, '/');
+        if ($cleanPath === '' || $cleanPath === '.') {
+            return '';
+        }
+
+        $resourceType = $this->getResourceType($cleanPath);
+        if ($resourceType === 'raw') {
+            return $cleanPath;
+        }
+
+        $dir = pathinfo($cleanPath, PATHINFO_DIRNAME);
+        $filename = pathinfo($cleanPath, PATHINFO_FILENAME);
 
         if ($dir === '.' || $dir === '/' || $dir === '') {
             return $filename;
@@ -404,26 +520,34 @@ class CloudinaryFlysystemAdapter implements FilesystemAdapter
 
     protected function getAssetMetadata(string $path): ?array
     {
-        $path = ltrim($path, '/');
-        if (isset($this->assetCache[$path])) {
-            return $this->assetCache[$path];
+        $cleanRelative = ltrim($path, '/');
+        if (isset($this->assetCache[$cleanRelative])) {
+            return $this->assetCache[$cleanRelative];
         }
 
-        $publicId = $this->getPublicId($path);
-        $resourceType = $this->getResourceType($path);
+        $prefixedPath = $this->prefixer->prefixPath($path);
+        $cleanPath = ltrim($prefixedPath, '/');
+        if (isset($this->assetCache[$cleanPath])) {
+            return $this->assetCache[$cleanPath];
+        }
+
+        $publicId = $this->getPublicId($cleanPath);
+        $resourceType = $this->getResourceType($cleanPath);
 
         try {
             $data = (array) $this->cloudinary->adminApi()->asset($publicId, [
                 'resource_type' => $resourceType,
             ]);
-            $this->assetCache[$path] = $data;
+            $this->assetCache[$cleanPath] = $data;
+            $this->assetCache[$cleanRelative] = $data;
 
             return $data;
         } catch (\Throwable) {
             if ($resourceType !== 'image') {
                 try {
                     $data = (array) $this->cloudinary->adminApi()->asset($publicId);
-                    $this->assetCache[$path] = $data;
+                    $this->assetCache[$cleanPath] = $data;
+                    $this->assetCache[$cleanRelative] = $data;
 
                     return $data;
                 } catch (\Throwable) {

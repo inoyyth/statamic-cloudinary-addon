@@ -10,7 +10,7 @@ use Statamic\Fields\Value;
 
 class StatamicImageService
 {
-    public const DEFAULT_FALLBACK = 'images/resume_banner_hero.jpg';
+    public const DEFAULT_FALLBACK = null;
 
     /**
      * Resolve an image URL from various Statamic and standard inputs.

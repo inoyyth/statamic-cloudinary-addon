@@ -11,6 +11,10 @@
         "cms"
     ],
     "license": "MIT",
+    "support": {
+        "issues": "https://github.com/inoyyth/statamic-cloudinary-addon/issues",
+        "source": "https://github.com/inoyyth/statamic-cloudinary-addon"
+    },
     "authors": [
         {
             "name": "Inoyyth",

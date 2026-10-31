@@ -3,14 +3,18 @@
 Seamless Cloudinary integration for **Statamic CMS**, featuring a complete Flysystem v3 storage adapter for Statamic Asset Containers, direct upload services, Antlers tags, Blade directives, and smart image resolution utilities.
 
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/inoyyth/statamic-cloudinary.svg?style=flat-square)](https://packagist.org/packages/inoyyth/statamic-cloudinary)
-[![Run Tests](https://github.com/Inoyyth/statamic-cloudinary/actions/workflows/run-tests.yml/badge.svg)](https://github.com/Inoyyth/statamic-cloudinary/actions/workflows/run-tests.yml)
-[![License](https://img.shields.io/github/license/Inoyyth/statamic-cloudinary.svg?style=flat-square)](LICENSE)
+[![Run Tests](https://github.com/inoyyth/statamic-cloudinary-addon/actions/workflows/run-tests.yml/badge.svg)](https://github.com/inoyyth/statamic-cloudinary-addon/actions/workflows/run-tests.yml)
+[![License](https://img.shields.io/github/license/inoyyth/statamic-cloudinary-addon.svg?style=flat-square)](LICENSE)
 
 ---
 
 ## Features
 
 - **Statamic Asset Container Integration**: Use Cloudinary as your Statamic Asset Container disk driver with full CP file listing, cursor-paginated folder browsing, uploading, renaming, and deleting.
+- **Path & Metadata Integrity**: Preserves exact extensions (`.jpeg`, `.pdf`, `.mp4`, etc.) and root `.meta/<filename>.yaml` metadata files across cache clears (`php artisan cache:clear`).
+- **CDN Invalidation**: Automatically sends cache-invalidation tags on upload, edit, rename, and destroy operations so recent edits never come back stale from the CDN.
+- **Secure File Delivery**: Strict TLS certificate peer verification on all internal file reads and streams.
+- **Multi-Site Account Isolation**: Optional folder/prefix scoping allows multiple websites or environments to share a single Cloudinary account seamlessly.
 - **Flysystem v3 Adapter**: High-performance, cached `CloudinaryFlysystemAdapter` adhering to League Flysystem standards.
 - **Smart Image Resolver**: Resolves URLs from Statamic `Value` objects, `Asset` instances, collections, nested arrays, and Cloudinary paths with intelligent fallback handling.
 - **Antlers Tags & Modifiers**: Effortlessly render responsive `<img>` tags and on-the-fly transformations inside Antlers templates.
@@ -61,6 +65,12 @@ CLOUDINARY_API_SECRET=your_api_secret
 
 # Or use the single Cloudinary connection URL:
 CLOUDINARY_URL=cloudinary://your_api_key:your_api_secret@your_cloud_name
+
+# Optional: isolate container assets to a subfolder
+CLOUDINARY_PREFIX=site-production
+
+# Optional: fallback image path when an image field is empty (defaults to null)
+STATAMIC_CLOUDINARY_FALLBACK=
 ```
 
 ### 2. Configure Filesystem Disk
@@ -77,15 +87,18 @@ In `config/filesystems.php`, add the `cloudinary` disk:
         'api_secret' => env('CLOUDINARY_API_SECRET'),
         'url' => env('CLOUDINARY_URL'),
         'secure' => env('CLOUDINARY_SECURE', true),
+        // Optional: scope this disk to a specific folder in Cloudinary
+        'prefix' => env('CLOUDINARY_PREFIX', ''),
     ],
 ],
 ```
 
+> **Multi-Site Tip**: If several sites share one Cloudinary account, setting `'prefix' => 'site-a'` or `'prefix' => 'site-b'` ensures each site's asset container only lists and manages its own folder.
+
 ### 3. Statamic Asset Container
 
-You can now configure a Statamic Asset Container to use the `cloudinary` disk!
-Inside the Statamic Control Panel:
-1. Navigate to **Assets** -> **Configure Containers**.
+Configure a Statamic Asset Container to use the `cloudinary` disk:
+1. In the Statamic Control Panel, navigate to **Assets** -> **Configure Containers**.
 2. Select or create your Container (e.g. `cloudinary`).
 3. Set **Disk** to `cloudinary`.
 
@@ -183,13 +196,25 @@ Cloudinary::delete($publicId);
 
 ## Running Tests
 
-The test suite covers Flysystem adapter operations, Antlers tags & modifiers, Blade directives, service providers, and helper functions:
+The test suite covers Flysystem adapter operations, path consistency, metadata preservation across cache clears, Antlers tags & modifiers, Blade directives, service providers, and helper functions:
 
 ```bash
 composer test
 # or
 ./vendor/bin/phpunit
 ```
+
+---
+
+## Changelog
+
+Please see [CHANGELOG.md](CHANGELOG.md) for details on recent changes and release notes.
+
+---
+
+## Support & Feedback
+
+If you encounter any issues or have questions, please open an issue on our [GitHub Issues](https://github.com/inoyyth/statamic-cloudinary-addon/issues) page or reach out via email.
 
 ---
 
